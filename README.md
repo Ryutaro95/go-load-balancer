@@ -1,86 +1,14 @@
 # go-load-balancer
 
-AWS ALBの設計・設定・障害時の動作を学び、必要なTCP/HTTP/TLSの知識をGoの小さな実験で深めるプロジェクト。
+AWS ALBの接続再利用・Timeout・切断・デプロイ時の挙動を、Goの小さな実験で理解する学習プロジェクトです。
 
-2026-10-09、学習者の合意によりALB中心の進め方へ変更。ロードバランサーの全面的な自作と旧8週間計画の完走は必須ではない。
+- [TCP Echo Server](experiments/tcp-echo/README.md)：Read / WriteとTCPのバイトストリームを観察する実験
 
-## ファイル
+```bash
+$ go run ./experiments/tcp-echo/
 
-- [AGENTS.md](AGENTS.md)：今後のセッションで守るメンターの方針
-- [ROADMAP.md](ROADMAP.md)：ALB中心の主計画と、任意の自作コース
-- [PROGRESS.md](PROGRESS.md)：現在の課題、実験結果、理解確認、未解決事項
-
-セッションは進捗確認から始める。次の課題への移行は学習者の許可を得る。
-
-## 環境と構成
-
-既存のGo moduleを利用する。初期確認時はGo 1.26.3 / macOS arm64。目標のLinuxでの検証は必要な段階で追加する。nc、tcpdumpなどはインストール状況とOSごとのオプションを確認して使用する。
-
-実験は `experiments/` 配下へ置く。統合した自作実装に進む場合は必要になった時点で `cmd/` と `internal/` に分ける。Codexは今回アプリケーションコードを作成・変更していない。
-
-ALBの実験ではnet/httpを最初から利用できる。ソケットの動きを調べる場合にnet.Listen / net.Conn / Read / Writeを使う。自作HTTPパーサーは任意のローカル学習用で外部公開しない。TLSはcrypto/tlsを使う。実験コードの完成は本番利用可能という意味ではない。
-
-## 現在の学習方針：ALBの通信と障害の仕組み
-
-ALBの一般的な構成・設定は学習者の実務経験を前提にする。接続再利用、Timeout、FIN/RST、登録解除・アプリ停止時の通信などの因果関係を具体的な事例で学ぶ。Go/TCPは必要になった箇所で基礎から説明する。最初の掘り下げ候補はバックエンドのKeep-Alive TimeoutとALB Idle Timeoutの関係。実験やAWSリソース作成はまだ行っていない。
-
-## 任意の実験：TCP Echo Server（旧Week 1 / Day 1）
-
-以下は旧課題を参考として保存したもの。現在の必須課題ではなく、必要になった時に再開する。会話では学習者の依頼により完成コードを提示済みだが、実行結果は未確認。
-
-### 学習目標
-
-接続の受付からRead、Write、終了までを実装する。TCPはメッセージではなくバイト列を運ぶことと、バッファ全体と読み取ったデータの違いを理解する。
-
-### 必要な知識
-
-- Listenerは新しい接続を待つ入口、Acceptが返すConnは1クライアントとの通信を表す。
-- Readはバッファを満たすまで待つことを保証しない。返されたnが今回の有効バイト数。n > 0とerrが同時に返る可能性があるので、受信データも確認する。
-- TCPでは送信側のWriteと受信側のReadの区切りが一致する保証はない。
-- Writeの戻り値とエラーを検査する。短い書き込みではエラーも伴う契約があり、エラーを無視して再試行し続けない。Write成功は相手のアプリケーションが処理済みという保証ではない。
-- EOFは相手からの受信方向の終了。TCPには送信・受信の2方向がある。Half-closeの本格的な実験は後のStepで行う。
-- Read/Acceptは待機し得る。まずは単一接続でこの動きを観察する。Goのdeferは関数終了時に実行されるので、接続の寿命に合う位置を考える。
-
-根拠：[Go net.Conn](https://pkg.go.dev/net#Conn)、[io.Reader](https://pkg.go.dev/io#Reader)、[io.Writer](https://pkg.go.dev/io#Writer)、[RFC 9293 §3.7](https://www.rfc-editor.org/rfc/rfc9293.html#section-3.7)。
-
-### 実装要件
-
-1. `experiments/tcp-echo/main.go` を学習者自身で作る。
-2. `127.0.0.1:9000` でTCP接続を受け付ける。
-3. 1接続から繰り返しReadし、その有効バイト列を変更せずWriteで返す。文字列や行の境界を前提にしない。最初は小さな固定長バッファでよい。
-4. 書き込みバイト数・エラーを確認し、無限ループやデータ欠落を防ぐ。読み取りエラー時も取得済みデータを扱う順序を考える。
-5. EOFとそれ以外のエラーを区別し、接続を確実に閉じる。1クライアントの終了後、次のクライアントを受け付ける。
-6. Listen/Acceptのエラーを扱う。起動失敗は終了し、接続終了と異常のログが分かるようにする。
-
-Day 1は逐次処理。goroutine、io.Copy、net/httpは使わず、Read/Writeを直接観察する。並行接続、期限、Graceful Shutdownは後続課題。現段階はループバック上の手動実験に限定した簡略実装。
-
-### 動作確認方法
-
-実装後、サーバーを `go run ./experiments/tcp-echo` で起動し、別の端末で `nc 127.0.0.1 9000` に接続する。以下は実施予定であり、まだ実行していない。
-
-1. 文字列を送信し、同じ内容が返る。端末が表示した自分の入力とサーバーの応答を区別する。
-2. クライアントを終了し、再接続して同じ実験ができる。
-3. 改行のない入力でもバイトが到着すれば応答する。対話端末の行バッファリングの影響を避け、入力をパイプするなどして確認する。
-4. 同じ接続へ時間を空けて分割送信する。受信した全体が送信全体と一致する。Read回数が送信回数と一致することは期待しない。
-5. バッファより大きい既知のデータを送り、返った全体をファイルに保存して `cmp` などでバイト一致を確認する。
-6. クライアントがいない時、接続して何も送らない時に、どの呼び出しが待機しているかログ等で確認する。
-
-ncのEOF後の挙動・Half-closeのオプションは実装により異なる。`nc -h` を確認して手順を決める。tcpdump観察は次のStepで、LinuxのloとmacOSのlo0を区別する。
-
-### 完成条件・理解度確認
-
-上記の入出力が一致し、切断後に再接続でき、重大なレビュー指摘が解消されていること。さらに次の問いに自分の言葉で回答できること。
-
-- 1024バイトのバッファにReadが3バイト返した場合、どの範囲を送り返すか？
-- クライアントが2回Writeした時、サーバーのReadは何回になるか？
-- n > 0とerrが同時に返った時、先にエラーで終了すると何が起きるか？
-- ListenerとConnはなぜ別のものか？ 接続のCloseを誰が担当するか？
-
-### 参考資料
-
-- [Go net.Listen](https://pkg.go.dev/net#Listen)、[Listener](https://pkg.go.dev/net#Listener)、[Conn](https://pkg.go.dev/net#Conn)
-- [Go io.Reader](https://pkg.go.dev/io#Reader)、[io.Writer](https://pkg.go.dev/io#Writer)
-- [RFC 9293 §3.5 接続確立](https://www.rfc-editor.org/rfc/rfc9293.html#section-3.5)、[§3.6 接続終了](https://www.rfc-editor.org/rfc/rfc9293.html#section-3.6)、[§3.7 データ通信](https://www.rfc-editor.org/rfc/rfc9293.html#section-3.7)
-
-RFCを通読してから始める必要はない。まずAPIと実測を結び付け、必要な節を読む。
-# go-load-balancer
+# 別ターミナルで
+$ nc 127.0.0.1 9000
+hello # 入力
+hello # 返り
+```

@@ -32,6 +32,7 @@
 
 - 環境確認：pwd、ファイル一覧、git status、go version、uname -sを実行。
 - Echo Serverの実行・テスト・パケット観察：未実施。
+- experiments/tcp-echo/README.mdに起動、対話送受信、再接続、改行なし、分割送信、64KiBのバイト一致確認の手順を追記。macOS版ncの `-w` をヘルプで確認。テスト結果ではなく実施用の手順として記録。
 
 ## 理解できたこと
 
